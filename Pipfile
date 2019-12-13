@@ -1,0 +1,16 @@
+[[source]]
+name = "pypi"
+url = "https://pypi.org/simple"
+verify_ssl = true
+
+[dev-packages]
+pytest = "*"
+ipython = "*"
+
+[packages]
+aaew-etl = {path = "/home/jhoeper/projects/py/tla-datentransformation"}
+aaew-couch-9999 = {git = "https://github.com/jkatzwinkel/aaew-couch.git",ref = "master"}
+docopt = "*"
+
+[requires]
+python_version = "3.8"
