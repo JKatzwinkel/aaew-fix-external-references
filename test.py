@@ -35,6 +35,7 @@ def test_wlist_whether_dza_ref_gets_created():
 def test_single_fix_aaew_wcn():
     ref = {'type': 'aaew_wcn', 'reference': '100'}
     fixed = fixie.apply_all_fixes('', '100', ref)
+    ref = list(fixed)[0]
     assert 'provider' in ref
     assert ref['type'] != 'aaew_wcn'
 

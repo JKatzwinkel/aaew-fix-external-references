@@ -30,7 +30,7 @@ from functools import lru_cache, wraps
 
 from tqdm import tqdm
 import docopt
-from aaew_etl import storage, util
+from aaew_etl import storage, util, log
 
 
 a64 = storage.get_couchdb_server()
@@ -236,7 +236,7 @@ def get_applicable_fixes(collection_name: str, ref: dict) -> list:
     ]
 
 
-def apply_single_fix(ID: str, ref: dict, fix: types.FunctionType):
+def apply_single_fix(ID: str, ref: dict, fix: types.FunctionType) -> types.GeneratorType:
     """ yields all results of the applied fix
 
     >>> list(apply_single_fix('', {'reference': 'domain/path/ID'}, fix_provider_cfeetk))
@@ -251,19 +251,26 @@ def apply_single_fix(ID: str, ref: dict, fix: types.FunctionType):
         for e in res:
             if e:
                 yield e
-    if res:
+    elif res:
         yield res
 
 
-def apply_all_fixes(collection_name: str, ID: str, ref: dict):
+def apply_all_fixes(collection_name: str, ID: str, ref: dict) -> types.GeneratorType:
+    """
+    >>> list(apply_all_fixes('', '', {'provider': 'foo', 'type': 'bar', 'reference': 'id'}))
+    [{'provider': 'foo', 'type': 'bar', 'reference': 'id'}]
+    """
     fixes = get_applicable_fixes(collection_name, ref)
-    while len(fixes) > 0:
-        fix = fixes.pop(0)
-        for res in apply_single_fix(ID, ref, fix):
-            yield from res
+    if len(fixes) > 0:
+        while len(fixes) > 0:
+            fix = fixes.pop(0)
+            log.info(f'apply fix {fix.__name__} to {ref}.')
+            yield from apply_single_fix(ID, ref, fix)
+    else:
+        yield cp_ref(ref)
 
 
-def apply_defined_fixes(collection_name: str, ID: str, refs: list):
+def apply_defined_fixes(collection_name: str, ID: str, refs: list) -> list:
     """ applies those ``fix_...`` functions to the external references at hand,
     which have a ``@fix`` decorator and scenario definitions matching the
     reference configuration, i.e. for a reference with provider ``thot``, the
@@ -284,6 +291,7 @@ def apply_defined_fixes(collection_name: str, ID: str, refs: list):
             ref,
         ):
             fixed_refs.append(res)
+            assert isinstance(res, dict)
     return fixed_refs
 
 
@@ -301,15 +309,37 @@ def apply_fixes_until_cows_come_home(
     fixed_refs = refs
     hashes = []
     while len(hashes) < 2 or hashes[-2] != hashes[-1]:
-        print(hashes)
         hashes.append(util.md5(fixed_refs))
         fixed_refs = apply_defined_fixes(
             collection_name,
             ID,
             fixed_refs
         )
+        assert isinstance(fixed_refs[0], dict)
         hashes.append(util.md5(fixed_refs))
     return fixed_refs
+
+
+def save_stats(collection_name: str, ID: str, ref: dict):
+    """ does just that (later this is being written to ``--stat-file``)
+    """
+    provider = ref.get('provider')
+    ref_type = ref.get('type')
+    ref_val = ref.get('reference')
+    _stats[collection_name][provider][ref_type][ID] += [ref_val]
+
+
+def do_fixes_apply(collection_name: str, ID: str, ref: dict) -> bool:
+    """ apply fixes and see whether the result is different from the original
+    ref. If so, this returns True.
+    """
+    fixed_hash = util.md5(
+        [
+            fixed
+            for fixed in apply_all_fixes(collection_name, ID, ref)
+        ]
+    )
+    return util.md5(ref) != fixed_hash
 
 
 def process_external_references(collection_name: str, doc: dict):
@@ -318,19 +348,17 @@ def process_external_references(collection_name: str, doc: dict):
     """
     refs = doc.get('externalReferences', [])
     for ref in refs:
-        provider = ref.get('provider')
-        ref_type = ref.get('type')
-        ref_val = ref.get('reference')
-        _stats[collection_name][provider][ref_type][doc['_id']] += [ref_val]
+        
+        save_stats(collection_name, doc['_id'], ref)
     fixed_refs = apply_fixes_until_cows_come_home(
         collection_name,
         doc['_id'],
         refs,
     )
     if util.md5(refs) != util.md5(fixed_refs):
-        print(refs)
-        print(fixed_refs)
-        print()
+        log.info(refs)
+        log.info(fixed_refs)
+        log.info('')
 
 
 def print_all_scenarios() -> list:
@@ -431,5 +459,4 @@ def main(args: dict):
 
 if __name__ == '__main__':
     args = docopt.docopt(__doc__)
-    print(args)
     main(args)
