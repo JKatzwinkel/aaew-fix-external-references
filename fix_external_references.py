@@ -3,7 +3,8 @@ Evaluate externalReferences in BTS documents.
 
 Usage:
     fix_external_references.py [<collection>... | --list-collections]
-    fix_external_references.py [--stat-file=<fn>]
+    fix_external_references.py --stat-file=<fn>
+    fix_external_references.py --list-fixes
 
     Collected information gets saved into the JSON file at the path specified
     via --stat-file parameter as a nested dictionary structured like this:
@@ -15,6 +16,7 @@ Options:
                         connected DB (empty collections are omitted)
     --stat-file=<fn>    Path to a JSON file where collected statistics are
                         saved [default: ext_refs.json].
+    --list-fixes        Print names and defined scenarios of all fix functions
 
 Arguments:
     <collection>    Any number of couchDB collection names which are to be
@@ -24,11 +26,11 @@ Arguments:
 import json
 import types
 from collections import defaultdict
-from functools import lru_cache, wraps, reduce
+from functools import lru_cache, wraps
 
 from tqdm import tqdm
 import docopt
-from aaew_etl import storage
+from aaew_etl import storage, util
 
 
 a64 = storage.get_couchdb_server()
@@ -43,32 +45,15 @@ _stats = defaultdict(
 
 _view = "function(doc){if(doc.state=='active'&&doc.eClass){emit(doc.id,doc);}}"
 
-_fix_functions = []
 
-
-def fix(func):
-    # TODO: maybe not
-    _fix_functions.append(func)
-
-    @wraps(func)
-    def wrapper(ID: str, ref: dict):
-        yield from func(ID, ref)
-
-    return wrapper
-
-
-def fix_provider_cfeetk(ID: str, ref: dict) -> dict:
-    """
-
-    >>> fix_provider_cfeetk('', {'reference': 'http://sith.huma-num.fr/vocable/287', 'type': 'aaew_wcn'})
-    {'reference': '287'}
-
-
-    """
-    ref['reference'] = ref.get('reference').split('/')[-1]
-    if 'type' in ref:
-        ref.pop('type')
-    return ref
+def cp_ref(ref: dict, *keys) -> dict:
+    res = {}
+    if len(keys) < 1:
+        keys = ref.keys()
+    for key in keys:
+        if key in ref:
+            res[key] = ref[key]
+    return res
 
 
 def aaew_type(ID: str):
@@ -76,13 +61,48 @@ def aaew_type(ID: str):
         else 'hieratic_hieroglyphic'
 
 
+def fix_provider_null_type_null(ID: str, ref: dict):
+    """
+    >>> fix_provider_null_type_null('', {})
+
+    >>> fix_provider_null_type_null('', {'reference': 'foo'})
+    {'reference': 'foo'}
+
+    """
+    if ref.get('reference') is not None:
+        return cp_ref(ref)
+    return None
+
+
+def fix_type_vega(ID: str, ref: dict):
+    """
+    >>> fix_type_vega('', {'type': 'vega', 'reference': '1'})
+    {'reference': '1', 'provider': 'vega'}
+
+    """
+    ref = cp_ref(ref, '_id', 'eClass', 'reference')
+    ref['provider'] = 'vega'
+    return ref
+
+
+def fix_provider_cfeetk(ID: str, ref: dict) -> dict:
+    """
+    >>> fix_provider_cfeetk('', {'reference': 'http://sith.huma-num.fr/vocable/287', 'type': 'aaew_wcn'})
+    {'reference': '287'}
+    """
+    ref = cp_ref(ref)
+    ref['reference'] = ref.get('reference').split('/')[-1]
+    if 'type' in ref:
+        ref.pop('type')
+    return ref
+
+
 def fix_type_aaew_wcn(ID: str, ref: dict) -> dict:
     """
-
     >>> fix_type_aaew_wcn('d1000', {})
     {'provider': 'aaew', 'type': 'demotic'}
-
     """
+    ref = cp_ref(ref, '_id', 'eClass', 'reference')
     ref['provider'] = 'aaew'
     ref['type'] = aaew_type(ID)
     return ref
@@ -94,19 +114,25 @@ def fix_provider_trismegistos_type_null(ID: str, ref: dict) -> dict:
     {'reference': '653740', 'type': 'text'}
 
     """
+    ref = cp_ref(ref)
     tm_type, tm_id = ref.get('reference').split('/')[-2:]
     ref['reference'] = tm_id
     ref['type'] = tm_type
     return ref
 
 
-def fix_provider_aaew_wcn(ID: str, ref: dict):
+def fix_provider_aaew(ID: str, ref: dict):
+    ref = cp_ref(ref)
     yield ref
     yield {
         'provider': 'dza',
         'type': aaew_type(ID),
         'reference': ref.get('reference')
     }
+
+
+def fix_reference_null(ID: str, ref: dict):
+    return None
 
 
 def exclude(*collection_names):
@@ -149,7 +175,7 @@ def parse_fix_name(name: str) -> dict:
     conf_field = None
     conf_values = []
     for segm in segments[1:]:
-        if segm in ['provider', 'type']:
+        if segm in ['provider', 'type', 'reference']:
             stash_conf()
             conf_field = segm
         else:
@@ -162,7 +188,7 @@ def is_fix_applicable(fix: types.FunctionType, ref: dict) -> bool:
     """ looks at a function name and decides whether it should be applied
     to the given reference.
 
-    >>> is_fix_applicable(fix_provider_aaew_wcn, {'provider': 'aaew_wcn'})
+    >>> is_fix_applicable(fix_provider_aaew, {'provider': 'aaew'})
     True
 
     >>> is_fix_applicable(fix_provider_cfeetk, {'provider': 'aaew_wcn'})
@@ -174,59 +200,143 @@ def is_fix_applicable(fix: types.FunctionType, ref: dict) -> bool:
     >>> is_fix_applicable(fix_provider_trismegistos_type_null, {'provider': 'trismegistos', 'type': 'text'})
     False
 
+    >>> is_fix_applicable(fix_reference_null, {'type': 'foo', 'provider': 'bar'})
+    True
+
     """
     conf = parse_fix_name(fix.__name__)
-    for key in ['type', 'provider']:
+    for key in ['type', 'provider', 'reference']:
         if key in conf:
             if ref.get(key) != conf.get(key):
                 return False
     return True
 
 
-def apply_defined_fixes(collection_name: str, ID: str, ref: dict):
-    """ applies those ``fix_...`` functions to the external reference at hand,
+def get_fixes() -> list:
+    """ return all defined fix functions"""
+    return [
+        f for f in globals().values()
+        if isinstance(f, types.FunctionType) and f.__name__.startswith('fix_')
+    ]
+
+
+def get_applicable_fixes(collection_name: str, ref: dict) -> list:
+    """
+    >>> [f.__name__ for f in get_applicable_fixes('', {'provider': 'trismegistos'})]
+    ['fix_provider_trismegistos_type_null', 'fix_reference_null']
+
+    """
+    assert isinstance(ref, dict)
+    return [
+        f for f in get_fixes()
+        if is_fix_applicable(f, ref) and not(
+            '_excluded_collections' in f.__dict__ and
+            collection_name in f.__dict__['excluded_collections']
+        )
+    ]
+
+
+def apply_single_fix(ID: str, ref: dict, fix: types.FunctionType):
+    """ yields all results of the applied fix
+
+    >>> list(apply_single_fix('', {'reference': 'domain/path/ID'}, fix_provider_cfeetk))
+    [{'reference': 'ID'}]
+
+    >>> list(apply_single_fix('', {'type': 'foo'}, fix_reference_null))
+    []
+
+    """
+    res = fix(ID, ref)
+    if isinstance(res, types.GeneratorType):
+        for e in res:
+            if e:
+                yield e
+    if res:
+        yield res
+
+
+def apply_all_fixes(collection_name: str, ID: str, ref: dict):
+    fixes = get_applicable_fixes(collection_name, ref)
+    while len(fixes) > 0:
+        fix = fixes.pop(0)
+        for res in apply_single_fix(ID, ref, fix):
+            yield from res
+
+
+def apply_defined_fixes(collection_name: str, ID: str, refs: list):
+    """ applies those ``fix_...`` functions to the external references at hand,
     which have a ``@fix`` decorator and scenario definitions matching the
     reference configuration, i.e. for a reference with provider ``thot``, the
     function ``fix_provider_thot`` will be called, and if it has a type
     ``foo``, then the function ``fix_provider_thot_type_foo`` will be called as
     well, applying its changes to the result of the first fix.
 
-    The returned result(s) contain(s) the changes made to the original external
-    reference made by all matching fix functions
-
-    Returns zero, one or more external reference objects depending on the fixes
-    applied
+    The returned results contain the changes made to the original external
+    references made by all matching fix functions
 
     """
-    fixes = [
-        f for f in globals().values()
-        if isinstance(f, types.FunctionType) and f.__name__.startswith('fix_')
-    ]
-    
-    results = [ref]
-    fixes_applied = True
-    while fixes_applied:
-        for fix in fixes:
-            if '_excluded_collections' in fix.__dict__:
-                if collection_name in fix.__dict__['_excluded_collections']:
-                    continue
-            results = reduce(
-                lambda a, b: a + b,
-                [list(fix(ID, r)) for r in results]
-            )
-    for ref in results:
-        yield ref
+    fixed_refs = []
+    for ref in refs:
+        assert isinstance(ref, dict)
+        for res in apply_all_fixes(
+            collection_name, 
+            ID, 
+            ref,
+        ):
+            fixed_refs.append(res)
+    return fixed_refs
+
+
+def apply_fixes_until_cows_come_home(
+    collection_name: str,
+    ID: str,
+    refs: list
+) -> list:
+    """ calls :func:`apply_defined_fixes` on the input until this results in
+    no further changes
+    """
+    if len(refs) < 1:
+        return []
+    assert isinstance(refs[0], dict)
+    fixed_refs = refs
+    hashes = []
+    while len(hashes) < 2 or hashes[-2] != hashes[-1]:
+        print(hashes)
+        hashes.append(util.md5(fixed_refs))
+        fixed_refs = apply_defined_fixes(
+            collection_name,
+            ID,
+            fixed_refs
+        )
+        hashes.append(util.md5(fixed_refs))
+    return fixed_refs
 
 
 def process_external_references(collection_name: str, doc: dict):
     """ does only collect external references information for now and saves
     it to --stat-file.
     """
-    for ref in doc.get('externalReferences', []):
+    refs = doc.get('externalReferences', [])
+    for ref in refs:
         provider = ref.get('provider')
         ref_type = ref.get('type')
         ref_val = ref.get('reference')
         _stats[collection_name][provider][ref_type][doc['_id']] += [ref_val]
+    fixed_refs = apply_fixes_until_cows_come_home(
+        collection_name,
+        doc['_id'],
+        refs,
+    )
+    if util.md5(refs) != util.md5(fixed_refs):
+        print(refs)
+        print(fixed_refs)
+        print()
+
+
+def print_all_scenarios() -> list:
+    for fix in get_fixes():
+        name = fix.__name__
+        print(f'{parse_fix_name(name)} -> {name}')
 
 
 def all_docs_in_collection(collection_name: str):
@@ -286,6 +396,9 @@ def list_collections():
 
 
 def main(args: dict):
+    if args.get('--list-fixes'):
+        print_all_scenarios()
+        return
     if len(args['<collection>']) < 1:
         if args['--list-collections']:
             list_collections()
