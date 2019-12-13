@@ -110,7 +110,7 @@ def fix_type_aaew_wcn(ID: str, ref: dict) -> dict:
     {'provider': 'aaew', 'type': 'demotic'}
     """
     ref = cp_ref(ref, '_id', 'eClass', 'reference')
-    ref['provider'] = 'aaew'
+    ref['provider'] = 'aaew_copy'
     ref['type'] = aaew_type(ID)
     return ref
 
@@ -122,14 +122,18 @@ def fix_provider_trismegistos_type_null(ID: str, ref: dict) -> dict:
 
     """
     ref = cp_ref(ref)
-    tm_type, tm_id = ref.get('reference').split('/')[-2:]
-    ref['reference'] = tm_id
-    ref['type'] = tm_type
+    try:
+        tm_type, tm_id = ref.get('reference').split('/')[-2:]
+        ref['reference'] = tm_id
+        ref['type'] = tm_type
+    except:
+        log.info(f'got unfixable trismegistos ref in doc {ID}: {ref}')
     return ref
 
 
-def fix_provider_aaew(ID: str, ref: dict):
+def fix_provider_aaew_copy(ID: str, ref: dict):
     ref = cp_ref(ref)
+    ref['provider'] = 'aaew'
     yield ref
     yield {
         'provider': 'dza',
