@@ -2,9 +2,9 @@
 Evaluate externalReferences in BTS documents.
 
 Usage:
-    fix_external_references.py [<collection>... | --list-collections]
-    fix_external_references.py --stat-file=<fn>
+    fix_external_references.py [<collection>...] [--stat-file=<fn>] [--fixable-only|--non-fixable-only]
     fix_external_references.py --list-fixes
+    fix_external_references.py --list-collections
 
     Collected information gets saved into the JSON file at the path specified
     via --stat-file parameter as a nested dictionary structured like this:
@@ -17,6 +17,9 @@ Options:
     --stat-file=<fn>    Path to a JSON file where collected statistics are
                         saved [default: ext_refs.json].
     --list-fixes        Print names and defined scenarios of all fix functions
+    --fixable-only      Only references to which fixes apply get saved to
+                        `--stat-file`
+    --non-fixable-only  Same as `--fixable-only` but the opposite
 
 Arguments:
     <collection>    Any number of couchDB collection names which are to be
@@ -42,6 +45,10 @@ _stats = defaultdict(
         )
     )
 )
+_stats_config = {
+    'fixable': True,
+    'non-fixable': True,
+}
 
 _view = "function(doc){if(doc.state=='active'&&doc.eClass){emit(doc.id,doc);}}"
 
@@ -315,7 +322,6 @@ def apply_fixes_until_cows_come_home(
             ID,
             fixed_refs
         )
-        assert isinstance(fixed_refs[0], dict)
         hashes.append(util.md5(fixed_refs))
     return fixed_refs
 
@@ -332,6 +338,10 @@ def save_stats(collection_name: str, ID: str, ref: dict):
 def do_fixes_apply(collection_name: str, ID: str, ref: dict) -> bool:
     """ apply fixes and see whether the result is different from the original
     ref. If so, this returns True.
+
+    >>> do_fixes_apply('', '', {'provider': 'foo', 'type': 'bar', 'reference': 'id'})
+    False
+
     """
     fixed_hash = util.md5(
         [
@@ -339,7 +349,7 @@ def do_fixes_apply(collection_name: str, ID: str, ref: dict) -> bool:
             for fixed in apply_all_fixes(collection_name, ID, ref)
         ]
     )
-    return util.md5(ref) != fixed_hash
+    return util.md5([ref]) != fixed_hash
 
 
 def process_external_references(collection_name: str, doc: dict):
@@ -348,8 +358,18 @@ def process_external_references(collection_name: str, doc: dict):
     """
     refs = doc.get('externalReferences', [])
     for ref in refs:
-        
-        save_stats(collection_name, doc['_id'], ref)
+        if all(_stats_config.values()):
+            should_be_saved = True
+        else:
+            should_be_saved = do_fixes_apply(
+                collection_name,
+                doc['_id'],
+                ref,
+            )
+            if _stats_config['non-fixable']:
+                should_be_saved = not(should_be_saved)
+        if should_be_saved:
+            save_stats(collection_name, doc['_id'], ref)
     fixed_refs = apply_fixes_until_cows_come_home(
         collection_name,
         doc['_id'],
@@ -427,6 +447,8 @@ def main(args: dict):
     if args.get('--list-fixes'):
         print_all_scenarios()
         return
+    _stats_config['fixable'] = not(args.get('--non-fixable-only', False))
+    _stats_config['non-fixable'] = not(args.get('--fixable-only', False))
     if len(args['<collection>']) < 1:
         if args['--list-collections']:
             list_collections()
