@@ -4,6 +4,7 @@
 .. todo::
   
    - UUIDs generieren fuer neu angelegte ``externalReference`` objekte
+   - DZA reference nur erzeugen bei hieratisch/hieroglyphisch
 
 
 installation
