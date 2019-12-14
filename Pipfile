@@ -8,8 +8,8 @@ pytest = "*"
 ipython = "*"
 
 [packages]
-aaew-etl = {path = "/home/jhoeper/projects/py/tla-datentransformation"}
-aaew-couch-9999 = {git = "https://github.com/jkatzwinkel/aaew-couch.git",ref = "master"}
+aaew-etl-9999 = {git = "git@github.com/jkatzwinkel/tla-datentransformation.git", ref = "api"}
+aaew-couch-9999 = {git = "https://github.com/jkatzwinkel/aaew-couch.git", ref = "master"}
 docopt = "*"
 
 [requires]
