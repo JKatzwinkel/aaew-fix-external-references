@@ -189,12 +189,10 @@ def fix_provider_aaew_copy(ID: str, ref: dict):
     ref = cp_ref(ref)
     ref['provider'] = 'aaew'
     yield ref
-    # TODO
-    yield {
-        'provider': 'dza',
-        'type': aaew_type(ID),
-        'reference': ref.get('reference')
-    }
+    ref = cp_ref(ref)
+    ref['provider'] = 'dza'
+    ref['type'] = aaew_type(ID)
+    yield ref
 
 
 def fix_reference_null(ID: str, ref: dict):
