@@ -26,6 +26,7 @@ Arguments:
                     processed
 
 """
+import re
 import json
 import types
 from collections import defaultdict
@@ -52,8 +53,18 @@ _stats_config = {
 
 _view = "function(doc){if(doc.state=='active'&&doc.eClass){emit(doc.id,doc);}}"
 
+_rex = {
+    k: re.compile(r)
+    for k, r in {
+        'thot': r'^http://thot\.philo\.ulg\.ac\.be/concept/thot-[0-9]*$',
+        'topbib': r'http://thot\.philo\.ulg\.ac\.be/concept/topbib-[0-9-]*[a-z]?$',
+        'trismegistos': r'^(https?://)?www\.trismegistos\.org/[^/]*/[0-9]*$',
+    }.items()
+}
+
 
 def cp_ref(ref: dict, *keys) -> dict:
+    # TODO: generate UUID _id
     res = {}
     if len(keys) < 1:
         keys = ref.keys()
@@ -107,7 +118,7 @@ def fix_provider_cfeetk(ID: str, ref: dict) -> dict:
 def fix_type_aaew_wcn(ID: str, ref: dict) -> dict:
     """
     >>> fix_type_aaew_wcn('d1000', {})
-    {'provider': 'aaew', 'type': 'demotic'}
+    {'provider': 'aaew_copy', 'type': 'demotic'}
     """
     ref = cp_ref(ref, '_id', 'eClass', 'reference')
     ref['provider'] = 'aaew_copy'
@@ -115,19 +126,62 @@ def fix_type_aaew_wcn(ID: str, ref: dict) -> dict:
     return ref
 
 
-def fix_provider_trismegistos_type_null(ID: str, ref: dict) -> dict:
+def fix_type_null_reference_trismegistos(
+    ID: str,
+    ref: dict
+) -> dict:
     """
-    >>> fix_provider_trismegistos_type_null('', {'reference': 'www.tm.org/text/653740'})
-    {'reference': '653740', 'type': 'text'}
+    >>> fix_type_null_reference_trismegistos('', {'reference': 'www.trismegistos.org/text/653740'})
+    {'reference': '653740', 'provider': 'trismegistos', 'type': 'text'}
 
     """
     ref = cp_ref(ref)
     try:
         tm_type, tm_id = ref.get('reference').split('/')[-2:]
         ref['reference'] = tm_id
+        ref['provider'] = ref.get('provider') or 'trismegistos'
         ref['type'] = tm_type
-    except:
+    except Exception:
         log.info(f'got unfixable trismegistos ref in doc {ID}: {ref}')
+    return ref
+
+
+def fix_provider_thot_reference_thot(ID: str, ref: dict) -> dict:
+    """
+    >>> fix_provider_thot_reference_thot('', {'reference': 'http://thot.philo.ulg.ac.be/concept/thot-4845'})
+    {'reference': 'thot-4845'}
+
+    """
+    ref = cp_ref(ref)
+    try:
+        thot_id = ref.get('reference').split('/')[-1]
+        ref['reference'] = thot_id
+    except Exception:
+        log.info(f'got unfixable thot ref in doc {ID}: '
+                 f'{ref.get("reference")}')
+    return ref
+
+
+def fix_provider_thot_reference_topbib(ID: str, ref: dict) -> dict:
+    """
+    >>> list(fix_provider_thot_reference_topbib('', {'reference': 'http://thot.philo.ulg.ac.be/concept/topbib-407-070'}))
+    [{'reference': 'topbib-407-070', 'provider': 'topbib', 'type': 'thot'}, {'reference': '407-070', 'provider': 'topbib', 'type': 'griffith'}]
+    """
+    ref = cp_ref(ref)
+    try:
+        topbib_id = ref.get('reference').split('/')[-1]
+        ref['reference'] = topbib_id
+        ref['provider'] = 'topbib'
+        ref['type'] = 'thot'
+        yield ref
+        ref = cp_ref(ref)
+        topbib_id = '-'.join(topbib_id.split('-')[1:])
+        ref['reference'] = topbib_id
+        ref['type'] = 'griffith'
+        yield ref
+    except Exception:
+        log.info(f'got unfixable thot topbib ref in doc {ID}: '
+                 f'{ref.get("reference")}')
     return ref
 
 
@@ -135,6 +189,7 @@ def fix_provider_aaew_copy(ID: str, ref: dict):
     ref = cp_ref(ref)
     ref['provider'] = 'aaew'
     yield ref
+    # TODO
     yield {
         'provider': 'dza',
         'type': aaew_type(ID),
@@ -199,26 +254,32 @@ def is_fix_applicable(fix: types.FunctionType, ref: dict) -> bool:
     """ looks at a function name and decides whether it should be applied
     to the given reference.
 
-    >>> is_fix_applicable(fix_provider_aaew, {'provider': 'aaew'})
+    >>> is_fix_applicable(fix_provider_aaew_copy, {'provider': 'aaew_copy'})
     True
 
     >>> is_fix_applicable(fix_provider_cfeetk, {'provider': 'aaew_wcn'})
     False
 
-    >>> is_fix_applicable(fix_provider_trismegistos_type_null, {'provider': 'trismegistos'})
-    True
-
-    >>> is_fix_applicable(fix_provider_trismegistos_type_null, {'provider': 'trismegistos', 'type': 'text'})
-    False
-
     >>> is_fix_applicable(fix_reference_null, {'type': 'foo', 'provider': 'bar'})
     True
 
+    >>> is_fix_applicable(fix_provider_thot_reference_thot, {'provider': 'thot', 'reference': 'http://thot.philo.ulg.ac.be/concept/thot-1000'})
+    True
+
+    >>> is_fix_applicable(fix_provider_thot_reference_thot, {'provider': 'thot', 'reference': 'www.foo.bar'})
+    False
+
     """
     conf = parse_fix_name(fix.__name__)
-    for key in ['type', 'provider', 'reference']:
-        if key in conf:
-            if ref.get(key) != conf.get(key):
+    for key in conf.keys():
+        if ref.get(key) != conf.get(key):
+            if key == 'reference':
+                if conf.get(key):
+                    if not _rex[conf.get(key)].match(ref.get(key) or ''):
+                        return False
+                else:
+                    return False
+            else:
                 return False
     return True
 
@@ -233,8 +294,8 @@ def get_fixes() -> list:
 
 def get_applicable_fixes(collection_name: str, ref: dict) -> list:
     """
-    >>> [f.__name__ for f in get_applicable_fixes('', {'provider': 'trismegistos'})]
-    ['fix_provider_trismegistos_type_null', 'fix_reference_null']
+    >>> [f.__name__ for f in get_applicable_fixes('', {'provider': 'trismegistos', 'reference': "www.trismegistos.org/text/128543"})]
+    ['fix_type_null_reference_trismegistos']
 
     """
     assert isinstance(ref, dict)
@@ -256,6 +317,9 @@ def apply_single_fix(ID: str, ref: dict, fix: types.FunctionType) -> types.Gener
     >>> list(apply_single_fix('', {'type': 'foo'}, fix_reference_null))
     []
 
+    >>> list(apply_single_fix('', {'provider': 'aaew_copy', 'reference': '1'}, fix_provider_aaew_copy))
+    [{'provider': 'aaew', 'reference': '1'}, {'provider': 'dza', 'type': 'hieratic_hieroglyphic', 'reference': '1'}]
+
     """
     res = fix(ID, ref)
     if isinstance(res, types.GeneratorType):
@@ -270,13 +334,24 @@ def apply_all_fixes(collection_name: str, ID: str, ref: dict) -> types.Generator
     """
     >>> list(apply_all_fixes('', '', {'provider': 'foo', 'type': 'bar', 'reference': 'id'}))
     [{'provider': 'foo', 'type': 'bar', 'reference': 'id'}]
+
+    >>> list(apply_all_fixes('', '', {'reference': 'www.trismegistos.org/text/45106'}))
+    [{'reference': '45106', 'provider': 'trismegistos', 'type': 'text'}]
+
     """
     fixes = get_applicable_fixes(collection_name, ref)
+    res = [ref]
     if len(fixes) > 0:
         while len(fixes) > 0:
             fix = fixes.pop(0)
-            log.info(f'apply fix {fix.__name__} to {ref}.')
-            yield from apply_single_fix(ID, ref, fix)
+            log.debug(f'apply fix {fix.__name__} to {res}.')
+            res = [
+                fixed_ref
+                for r in res
+                for fixed_ref in apply_single_fix(ID, r, fix)
+            ]
+        for r in res:
+            yield r
     else:
         yield cp_ref(ref)
 
@@ -297,8 +372,8 @@ def apply_defined_fixes(collection_name: str, ID: str, refs: list) -> list:
     for ref in refs:
         assert isinstance(ref, dict)
         for res in apply_all_fixes(
-            collection_name, 
-            ID, 
+            collection_name,
+            ID,
             ref,
         ):
             fixed_refs.append(res)
@@ -327,6 +402,11 @@ def apply_fixes_until_cows_come_home(
             fixed_refs
         )
         hashes.append(util.md5(fixed_refs))
+        if len(hashes) > 20:
+            log.info(f'infinite loop in doc {ID} in {collection_name}:')
+            log.info(f'started with {refs}')
+            log.info(f'endet up with {fixed_refs}')
+            break
     return fixed_refs
 
 
@@ -382,13 +462,25 @@ def process_external_references(collection_name: str, doc: dict):
     if util.md5(refs) != util.md5(fixed_refs):
         log.info(refs)
         log.info(fixed_refs)
-        log.info('')
 
 
 def print_all_scenarios() -> list:
     for fix in get_fixes():
         name = fix.__name__
         print(f'{parse_fix_name(name)} -> {name}')
+
+
+def count_refs_in_stats() -> int:
+    """ how many refs have been stored in the stats dict """
+    return sum(
+        [
+            len(ref_ids)
+            for collection_name, providers in _stats.items()
+            for provider, ref_types in providers.items()
+            for ref_type, doc_ids in ref_types.items()
+            for doc_id, ref_ids in doc_ids.items()
+        ]
+    )
 
 
 def all_docs_in_collection(collection_name: str):
@@ -475,8 +567,8 @@ def main(args: dict):
     # save collected stats
     try:
         with open(args['--stat-file'], 'w+') as f:
-            print(f'writing gathered reference information to file '
-                  f'{args["--stat-file"]}.')
+            print(f'writing {count_refs_in_stats()} gathered references to '
+                  f'file {args["--stat-file"]}.')
             json.dump(_stats, f, indent=2)
     except Exception as e:
         print(f'cannot write statistics to file {args["--stat-file"]}!')
