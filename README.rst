@@ -117,3 +117,7 @@ Um sich die definierten fix functions und die scenarien in welchen sie aktiv wer
    pipenv run python fix_external_references.py --list-fixes
 
 
+Wenn man die problematischen ext refs identifiziert und fixes fuer sie geschrieben hat, kann man mit ``--non-fixable-only``
+die ergebnisse, welche in die ``--stat-file`` geschrieben werden, einschraenken auf diejenigen, welche sich durch anwendung
+der definierten fixes nicht aendern wuerden. Das sind dann am ende sozusagen diejenigen die uebrig bleiben wuerden und die
+haendisch korrigiert werden muessen.
