@@ -3,6 +3,7 @@ Evaluate externalReferences in BTS documents.
 
 Usage:
     fix_external_references.py [<collection>...] [--stat-file=<fn>] [--fixable-only|--non-fixable-only]
+    fix_external_references.py [<collection>...] [--stat-file=<fn>] [--fix [--upload]]
     fix_external_references.py --list-fixes
     fix_external_references.py --list-collections
 
@@ -20,6 +21,8 @@ Options:
     --fixable-only      Only references to which fixes apply get saved to
                         `--stat-file`
     --non-fixable-only  Same as `--fixable-only` but the opposite
+    --fix               Apply fixes without uploading the results
+    --upload            Upload fixed refs to CouchDB
 
 Arguments:
     <collection>    Any number of couchDB collection names which are to be
@@ -434,32 +437,67 @@ def do_fixes_apply(collection_name: str, ID: str, ref: dict) -> bool:
     return util.md5([ref]) != fixed_hash
 
 
-def process_external_references(collection_name: str, doc: dict):
-    """ does only collect external references information for now and saves
-    it to --stat-file.
-    """
-    refs = doc.get('externalReferences', [])
+def save_to_stats(collection_name: str, ID: str, refs: list):
+    """ save multiple refs to stats file """
     for ref in refs:
         if all(_stats_config.values()):
             should_be_saved = True
         else:
             should_be_saved = do_fixes_apply(
                 collection_name,
-                doc['_id'],
+                ID,
                 ref,
             )
             if _stats_config['non-fixable']:
                 should_be_saved = not(should_be_saved)
         if should_be_saved:
-            save_stats(collection_name, doc['_id'], ref)
+            save_stats(collection_name, ID, ref)
+
+
+def is_ref_in_list(ref: dict, refs: list) -> bool:
+    """ determines if a ref occurs within the list of refs by comparing md5 sums"""
+    h = util.md5(ref)
+    for r in refs:
+        if util.md5(r) == h:
+            return True
+    return False
+
+
+def process_external_references(
+        collection_name: str,
+        doc: dict,
+        apply_fixes: bool = False
+) -> bool:
+    """ does only collect external references information for now and saves
+    it to --stat-file.
+
+    If ``--fix`` flag is set, fixes will be applied to fixable refs and the
+    document's ``externalReferences`` will be overwritten with the results.
+
+    :returns: whether fixes have been applied and written to the document
+    """
+    refs = doc.get('externalReferences', [])
     fixed_refs = apply_fixes_until_cows_come_home(
         collection_name,
         doc['_id'],
         refs,
     )
+    if not apply_fixes:
+        save_to_stats(
+            collection_name,
+            doc['_id'],
+            refs,
+        )
     if util.md5(refs) != util.md5(fixed_refs):
         log.info(refs)
         log.info(fixed_refs)
+        if apply_fixes:
+            for ref in fixed_refs:
+                if not is_ref_in_list(ref, refs):
+                    save_stats(collection_name, doc['_id'], ref)
+            doc['externalReferences'] = fixed_refs
+            return True
+    return False
 
 
 def print_all_scenarios() -> list:
@@ -516,7 +554,7 @@ def query_bts_doc_count(collection_name: str) -> int:
     )
 
 
-def gather_collection_stats(collection_name: str):
+def gather_collection_stats(collection_name: str, apply_fixes: bool = False):
     """ go through every BTS document in collection and collect external
     references"""
     doc_count = query_bts_doc_count(collection_name)
@@ -525,6 +563,7 @@ def gather_collection_stats(collection_name: str):
             process_external_references(
                 collection_name,
                 doc,
+                apply_fixes=apply_fixes
             )
 
 
@@ -561,13 +600,16 @@ def main(args: dict):
             collection_names = [cn for cn in args['<collection>'] if cn in a64]
     # go through specified collections
     for collection_name in collection_names:
-        gather_collection_stats(collection_name)
+        gather_collection_stats(
+            collection_name,
+            apply_fixes=args.get('--fix', False)
+        )
     # save collected stats
     try:
         with open(args['--stat-file'], 'w+') as f:
             print(f'writing {count_refs_in_stats()} gathered references to '
                   f'file {args["--stat-file"]}.')
-            json.dump(_stats, f, indent=2)
+            json.dump(_stats, f, indent=2, sort_keys=True)
     except Exception as e:
         print(f'cannot write statistics to file {args["--stat-file"]}!')
         print(e)
