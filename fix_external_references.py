@@ -135,19 +135,19 @@ def add_revision(doc: dict, t: dt = None) -> dict:
     dokuments an.
 
     >>> add_revision({}, t=dt(2017,12,12))
-    {'revisions': ['1@2017-12-12T00:00:00@74cb6b70ab6b58566bfadc664b00282d']}
+    {'revisions': ['0@2017-12-12T00:00:00@74cb6b70ab6b58566bfadc664b00282d']}
 
 
     >>> doc={}
     >>> x=add_revision(doc, t=dt(2017,12,12))
     >>> doc
-    {'revisions': ['1@2017-12-12T00:00:00@74cb6b70ab6b58566bfadc664b00282d']}
+    {'revisions': ['0@2017-12-12T00:00:00@74cb6b70ab6b58566bfadc664b00282d']}
 
     """
     revs = doc.get('revisions', [])
     t = t or dt.now()
     revs.append(
-        f'{len(revs)+1}@{t:%Y-%m-%dT%H:%M:%S}@74cb6b70ab6b58566bfadc664b00282d'
+        f'{len(revs)}@{t:%Y-%m-%dT%H:%M:%S}@74cb6b70ab6b58566bfadc664b00282d'
     )
     doc['revisions'] = revs
     return doc
@@ -186,12 +186,15 @@ def generate_topbib_thot_and_griffith(ref: dict):
     if topbib_id is None:
         raise ValueError
     else:
+        ref = cp_ref(ref)
         yield {
             **cp_ref(ref),
             'reference': f'topbib-{topbib_id}',
             'provider': 'topbib',
             'type': 'thot'
         }
+        if '_id' in ref:
+            ref['_id'] = generate_id()
         yield {
             **cp_ref(ref),
             'reference': topbib_id,
@@ -365,6 +368,8 @@ def fix_provider_aaew_copy(ID: str, ref: dict):
     ref['provider'] = 'aaew'
     yield ref
     ref = cp_ref(ref)
+    if '_id' in ref:
+        ref['_id'] = generate_id()
     ref['provider'] = 'dza'
     ref['type'] = aaew_type(ID)
     yield ref
