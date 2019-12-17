@@ -6,6 +6,7 @@ Usage:
     fix_external_references.py [<collection>...] [--stat-file=<fn>] [--fix [--upload]]
     fix_external_references.py --list-fixes
     fix_external_references.py --list-collections
+    fix_external_references.py --generate-id
 
     Collected information gets saved into the JSON file at the path specified
     via --stat-file parameter as a nested dictionary structured like this:
@@ -15,6 +16,8 @@ Usage:
 Options:
     --list-collections  Print names of all relevant collections found in
                         connected DB (empty collections are omitted)
+    --generate-id       Generate and print a single BTS contained object ID and
+                        stop.
     --stat-file=<fn>    Path to a JSON file where collected statistics are
                         saved [default: ext_refs.json].
     --list-fixes        Print names and defined scenarios of all fix functions
@@ -683,6 +686,11 @@ def list_collections():
 def main(args: dict):
     if args.get('--list-fixes'):
         print_all_scenarios()
+        return
+    if args.get('--generate-id'):
+        print(
+            generate_id()
+        )
         return
     _stats_config['fixable'] = not(args.get('--non-fixable-only', False))
     _stats_config['non-fixable'] = not(args.get('--fixable-only', False))
