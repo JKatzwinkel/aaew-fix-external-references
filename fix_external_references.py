@@ -31,7 +31,10 @@ Arguments:
 """
 import re
 import json
+import uuid
+import base64
 import types
+from datetime import datetime as dt
 from collections import defaultdict
 from functools import lru_cache, wraps
 
@@ -66,18 +69,73 @@ _rex = {
 }
 
 
+def pp(obj):
+    """ pretty print
+
+    >>> pp({'c': 4, 'a': 1, 'b': [2, 3]})
+    {
+      "a": 1,
+      "b": [
+        2,
+        3
+      ],
+      "c": 4
+    }
+    """
+    print(json.dumps(obj, indent=2, sort_keys=True))
+
+
+def generate_id() -> str:
+    """ generate a new ID based on hostname and date
+
+    >>> len(generate_id())
+    27
+    """
+    return base64.urlsafe_b64encode(
+        bytes.fromhex(
+            (dt.now().strftime('%Y0%j') + str(uuid.uuid4()).replace('-',''))[:40])
+        ).decode().replace('-', 'Q').replace('_', 'W')[:-1]
+
+
 def cp_ref(ref: dict, *keys) -> dict:
-    # TODO: generate UUID _id
+    """ erstellt eine kopie der uebergebenen external reference mit entweder den
+    angegebenen feldern oder allen feldern.
+
+    Wenn das ``_id`` feld NICHT unter den zu kopierenden keys ist, ABER im
+    original objekt enthalten, wird eine neue ID auf Basis der aktuellen
+    uhrzeit und der MAC adresse des ausfuehrenden hosts erzeugt.
+
+    >>> cp_ref({'type': 'text', 'provider': 'trismegistos', 'reference': 'x'})
+    {'type': 'text', 'provider': 'trismegistos', 'reference': 'x'}
+
+    >>> cp_ref({'_id': 'xxx'}, '_id')['_id']
+    'xxx'
+
+    >>> len(cp_ref({'type': 't', '_id': 'xxx'}, 'type')['_id'])
+    27
+
+    """
     res = {}
     if len(keys) < 1:
         keys = ref.keys()
     for key in keys:
         if key in ref:
             res[key] = ref[key]
+    if '_id' not in res and '_id' in ref:
+        res['_id'] = generate_id()
     return res
 
 
 def aaew_type(ID: str):
+    """ weist einer ID den type ``hieratic_hieroglyphic`` oder ``demotic`` zu,
+    je nachdem ob sie mit einem ``d`` beginnt oder nicht.
+
+    >>> aaew_type('10070')
+    'hieratic_hieroglyphic'
+
+    >>> aaew_type('dm2356')
+    'demotic'
+    """
     return 'demotic' if ID.lower().startswith('d')\
         else 'hieratic_hieroglyphic'
 
@@ -97,11 +155,14 @@ def fix_provider_null_type_null(ID: str, ref: dict):
 
 def fix_type_vega(ID: str, ref: dict):
     """
-    >>> fix_type_vega('', {'type': 'vega', 'reference': '1'})
-    {'reference': '1', 'provider': 'vega'}
+    >>> pp(fix_type_vega('', {'type': 'vega', 'reference': '1'}))
+    {
+      "provider": "vega",
+      "reference": "1"
+    }
 
     """
-    ref = cp_ref(ref, '_id', 'eClass', 'reference')
+    ref = cp_ref(ref, 'eClass', 'reference')
     ref['provider'] = 'vega'
     return ref
 
@@ -318,8 +379,18 @@ def apply_single_fix(ID: str, ref: dict, fix: types.FunctionType) -> types.Gener
     >>> list(apply_single_fix('', {'type': 'foo'}, fix_reference_null))
     []
 
-    >>> list(apply_single_fix('', {'provider': 'aaew_copy', 'reference': '1'}, fix_provider_aaew_copy))
-    [{'provider': 'aaew', 'reference': '1'}, {'provider': 'dza', 'type': 'hieratic_hieroglyphic', 'reference': '1'}]
+    >>> pp(list(apply_single_fix('', {'provider': 'aaew_copy', 'reference': '1'}, fix_provider_aaew_copy)))
+    [
+      {
+        "provider": "aaew",
+        "reference": "1"
+      },
+      {
+        "provider": "dza",
+        "reference": "1",
+        "type": "hieratic_hieroglyphic"
+      }
+    ]
 
     """
     res = fix(ID, ref)
@@ -461,6 +532,16 @@ def is_ref_in_list(ref: dict, refs: list) -> bool:
         if util.md5(r) == h:
             return True
     return False
+
+
+def update_and_upload_document(collection_name: str, doc: dict, refs: list):
+    """ replaces the document's ``externalReferences`` array with the passed refs,
+    appends a newly created revision to the revision history, and uploads it
+    into the specified collection on the database server.
+    """
+    # TODO: revision erzeugen
+    doc['externalReferences'] = refs
+    a64[collection_name][doc['_id']] = doc
 
 
 def process_external_references(
