@@ -43,7 +43,7 @@ from functools import lru_cache, wraps
 
 from tqdm import tqdm
 import docopt
-from aaew_etl import storage, util, log
+from aaew_etl import storage, util, log, filing
 
 
 a64 = storage.get_couchdb_server()
@@ -517,6 +517,22 @@ def save_stats(collection_name: str, ID: str, ref: dict):
     _stats[collection_name][provider][ref_type][ID] += [ref_val]
 
 
+@filing(path='fixed_documents/before')
+def _save_document(doc: dict):
+    """ save document to path in decoration """
+    return doc
+
+
+@filing(path='fixed_documents/after')
+def save_side_by_side_comparison_to_file(doc: dict, fixed_refs: list):
+    """ saves a before and after version of an updated document to file for
+    investigation with a diff tool.
+    """
+    _save_document(doc)
+    update_document(doc, fixed_refs)
+    return doc
+
+
 def do_fixes_apply(collection_name: str, ID: str, ref: dict) -> bool:
     """ apply fixes and see whether the result is different from the original
     ref. If so, this returns True.
@@ -560,28 +576,28 @@ def is_ref_in_list(ref: dict, refs: list) -> bool:
     return False
 
 
-def update_and_upload_document(collection_name: str, doc: dict, refs: list):
+def update_document(doc: dict, refs: list) -> dict:
     """ replaces the document's ``externalReferences`` array with the passed refs,
-    appends a newly created revision to the revision history, and uploads it
-    into the specified collection on the database server.
+    appends a newly created revision to the revision history
     """
     doc['externalReferences'] = refs
     add_revision(doc)
-    a64[collection_name][doc['_id']] = doc
+    return doc
 
 
 def process_external_references(
         collection_name: str,
         doc: dict,
         apply_fixes: bool = False
-) -> bool:
+) -> list:
     """ does only collect external references information for now and saves
     it to --stat-file.
 
     If ``--fix`` flag is set, fixes will be applied to fixable refs and the
     document's ``externalReferences`` will be overwritten with the results.
 
-    :returns: whether fixes have been applied and written to the document
+    :returns: updated reference list in case any fixes have been applied,
+              None otherwise
     """
     refs = doc.get('externalReferences', [])
     fixed_refs = apply_fixes_until_cows_come_home(
@@ -602,9 +618,8 @@ def process_external_references(
             for ref in fixed_refs:
                 if not is_ref_in_list(ref, refs):
                     save_stats(collection_name, doc['_id'], ref)
-            doc['externalReferences'] = fixed_refs
-            return True
-    return False
+            return fixed_refs
+    return None
 
 
 def print_all_scenarios() -> list:
@@ -667,11 +682,19 @@ def gather_collection_stats(collection_name: str, apply_fixes: bool = False):
     doc_count = query_bts_doc_count(collection_name)
     if doc_count > 0:
         for doc in all_docs_in_collection(collection_name):
-            process_external_references(
+            fixed_refs = process_external_references(
                 collection_name,
                 doc,
                 apply_fixes=apply_fixes
             )
+            if fixed_refs is not None and apply_fixes is True:
+                save_side_by_side_comparison_to_file(doc, fixed_refs)
+
+
+def execute_fixes_and_upload(collection_name: str, doc: dict):
+    """ same as process_external_references, but updates documents and uploads them """
+    # TODO
+    pass
 
 
 def list_collections():
