@@ -66,8 +66,9 @@ _rex = {
     k: re.compile(r)
     for k, r in {
         'thot': r'^http://thot\.philo\.ulg\.ac\.be/concept/thot-[0-9]*$',
-        'topbib': r'http://thot\.philo\.ulg\.ac\.be/concept/topbib-[0-9-]*[a-z]?$',
+        'topbib': r'^http://thot\.philo\.ulg\.ac\.be/concept/topbib-[0-9-]*[a-z]?$',
         'trismegistos': r'^(https?://)?www\.trismegistos\.org/[^/]*/[0-9]*$',
+        'griffith': r'^https?://topbib\.griffith\.ox\.ac\.uk//?dtb.html\?topbib=[0-9-]*[a-z]?\w*$'
     }.items()
 }
 
@@ -166,17 +167,69 @@ def aaew_type(ID: str):
         else 'hieratic_hieroglyphic'
 
 
+def empty_ref():
+    """ returns a new external reference with an ``eClass`` field and a
+    generated ``_id`` value.
+    """
+    return {
+        "eClass": "http://btsmodel/1.0#//BTSExternalReference",
+        "_id": generate_id(),
+    }
+
+
+def generate_topbib_thot_and_griffith(ref: dict):
+    """
+    >>> list(generate_topbib_thot_and_griffith({'reference': '407-070'}))
+    [{'reference': 'topbib-407-070', 'provider': 'topbib', 'type': 'thot'}, {'reference': '407-070', 'provider': 'topbib', 'type': 'griffith'}]
+    """
+    topbib_id = ref.get('reference')
+    if topbib_id is None:
+        raise ValueError
+    else:
+        yield {
+            **cp_ref(ref),
+            'reference': f'topbib-{topbib_id}',
+            'provider': 'topbib',
+            'type': 'thot'
+        }
+        yield {
+            **cp_ref(ref),
+            'reference': topbib_id,
+            'provider': 'topbib',
+            'type': 'griffith'
+        }
+
+
 def fix_provider_null_type_null(ID: str, ref: dict):
     """
-    >>> fix_provider_null_type_null('', {})
-
     >>> fix_provider_null_type_null('', {'reference': 'foo'})
     {'reference': 'foo'}
 
+    >>> fix_provider_null_type_null('', {})
     """
     if ref.get('reference') is not None:
         return cp_ref(ref)
     return None
+
+
+def fix_type_aaew_1(ID: str, ref: dict):
+    """
+    >>> pp(fix_type_aaew_1('', {'type': 'aaew_1', 'reference': '2/1312'}))
+    {
+      "provider": "aaew",
+      "reference": "2/1312"
+    }
+
+    >>> pp(fix_type_aaew_1('', {'provider': 'aaew', 'type': 'aaew_1', 'reference': '11'}))
+    {
+      "provider": "aaew",
+      "reference": "11"
+    }
+    """
+    ref = cp_ref(ref)
+    ref['provider'] = 'aaew'
+    ref.pop('type')
+    return ref
 
 
 def fix_type_vega(ID: str, ref: dict):
@@ -260,22 +313,54 @@ def fix_provider_thot_reference_topbib(ID: str, ref: dict) -> dict:
     ref = cp_ref(ref)
     try:
         topbib_id = ref.get('reference').split('/')[-1]
-        ref['reference'] = topbib_id
-        ref['provider'] = 'topbib'
-        ref['type'] = 'thot'
-        yield ref
-        ref = cp_ref(ref)
         topbib_id = '-'.join(topbib_id.split('-')[1:])
         ref['reference'] = topbib_id
-        ref['type'] = 'griffith'
-        yield ref
+        yield from generate_topbib_thot_and_griffith(ref)
     except Exception:
         log.info(f'got unfixable thot topbib ref in doc {ID}: '
                  f'{ref.get("reference")}')
     return ref
 
 
+def fix_provider_topographical_bibliography_reference_griffith(ID: str, ref: dict) -> dict:
+    """ fix ``topographical bibliography`` provider containing griffith links
+
+    >>> list(fix_provider_topographical_bibliography_reference_griffith('', {'reference': 'http://topbib.griffith.ox.ac.uk//dtb.html?topbib=704-020-010-260'}))
+    [{'reference': 'topbib-704-020-010-260', 'provider': 'topbib', 'type': 'thot'}, {'reference': '704-020-010-260', 'provider': 'topbib', 'type': 'griffith'}]
+    """
+    ref = cp_ref(ref)
+    try:
+        topbib_id = ref.get('reference').strip().split('=')[-1]
+        ref['reference'] = topbib_id
+        yield from generate_topbib_thot_and_griffith(ref)
+    except Exception:
+        log.info(f'got unfixable griffith link in doc {ID}: '
+                 f'{ref.get("reference")}')
+    return ref
+
+
+def fix_provider_topographical_bibliography_reference_topbib(ID: str, ref: dict) -> dict:
+    """ applies :func:`fix_provider_thot_reference_topbib`.
+
+    >>> list(fix_provider_topographical_bibliography_reference_topbib('', {'reference': 'http://thot.philo.ulg.ac.be/concept/topbib-407-070'}))
+    [{'reference': 'topbib-407-070', 'provider': 'topbib', 'type': 'thot'}, {'reference': '407-070', 'provider': 'topbib', 'type': 'griffith'}]
+    """
+    return fix_provider_thot_reference_topbib(ID, ref)
+
+
+def fix_provider_topographical_bibliography_reference_thot(ID: str, ref: dict) -> dict:
+    """ applies :func:`fix_provider_thot_reference_thot`
+
+    >>> fix_provider_topographical_bibliography_reference_thot('', {'reference': 'http://thot.philo.ulg.ac.be/concept/thot-4845'})
+    {'reference': 'thot-4845'}
+    """
+    return fix_provider_thot_reference_thot(ID, ref)
+
+
 def fix_provider_aaew_copy(ID: str, ref: dict):
+    """ fixes the dummy provider ``aaew_copy`` which is used as an intermediate
+    during DZA link creation
+    """
     ref = cp_ref(ref)
     ref['provider'] = 'aaew'
     yield ref
@@ -286,6 +371,7 @@ def fix_provider_aaew_copy(ID: str, ref: dict):
 
 
 def fix_reference_null(ID: str, ref: dict):
+    """ delete references with no reference """
     return None
 
 
@@ -338,6 +424,19 @@ def parse_fix_name(name: str) -> dict:
     return conf
 
 
+def normalize_identifier(s: str) -> str:
+    """ omits spaces and underscores
+
+    >>> normalize_identifier('topographical bibliography') == normalize_identifier('topographical_bibliography')
+    True
+
+    >>> normalize_identifier(None)
+    
+    """
+    if s:
+        return s.replace(' ', '').replace('_', '')
+
+
 def is_fix_applicable(fix: types.FunctionType, ref: dict) -> bool:
     """ looks at a function name and decides whether it should be applied
     to the given reference.
@@ -357,10 +456,13 @@ def is_fix_applicable(fix: types.FunctionType, ref: dict) -> bool:
     >>> is_fix_applicable(fix_provider_thot_reference_thot, {'provider': 'thot', 'reference': 'www.foo.bar'})
     False
 
+    >>> is_fix_applicable(fix_provider_topographical_bibliography_reference_topbib, {'provider': 'topographical bibliography', 'reference': 'http://thot.philo.ulg.ac.be/concept/topbib-100-100-10'})
+    True
+
     """
     conf = parse_fix_name(fix.__name__)
     for key in conf.keys():
-        if ref.get(key) != conf.get(key):
+        if normalize_identifier(ref.get(key)) != normalize_identifier(conf.get(key)):
             if key == 'reference':
                 if conf.get(key):
                     if not _rex[conf.get(key)].match(ref.get(key) or ''):
@@ -511,9 +613,9 @@ def apply_fixes_until_cows_come_home(
 def save_stats(collection_name: str, ID: str, ref: dict):
     """ does just that (later this is being written to ``--stat-file``)
     """
-    provider = ref.get('provider')
-    ref_type = ref.get('type')
-    ref_val = ref.get('reference')
+    provider = ref.get('provider', 'null')
+    ref_type = ref.get('type', 'null')
+    ref_val = ref.get('reference', 'null')
     _stats[collection_name][provider][ref_type][ID] += [ref_val]
 
 
@@ -530,6 +632,7 @@ def save_side_by_side_comparison_to_file(doc: dict, fixed_refs: list):
     """
     _save_document(doc)
     update_document(doc, fixed_refs)
+    log.debug(f'save {doc["eClass"]} doc {doc["_id"]} to file..')
     return doc
 
 
@@ -612,8 +715,6 @@ def process_external_references(
             refs,
         )
     if util.md5(refs) != util.md5(fixed_refs):
-        log.info(refs)
-        log.info(fixed_refs)
         if apply_fixes:
             for ref in fixed_refs:
                 if not is_ref_in_list(ref, refs):
