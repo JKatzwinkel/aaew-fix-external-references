@@ -126,6 +126,29 @@ def cp_ref(ref: dict, *keys) -> dict:
     return res
 
 
+def add_revision(doc: dict, t: dt = None) -> dict:
+    """ erzeugt eine neue revision und haengt sie an die revision history des
+    dokuments an.
+
+    >>> add_revision({}, t=dt(2017,12,12))
+    {'revisions': ['1@2017-12-12T00:00:00@74cb6b70ab6b58566bfadc664b00282d']}
+
+
+    >>> doc={}
+    >>> x=add_revision(doc, t=dt(2017,12,12))
+    >>> doc
+    {'revisions': ['1@2017-12-12T00:00:00@74cb6b70ab6b58566bfadc664b00282d']}
+
+    """
+    revs = doc.get('revisions', [])
+    t = t or dt.now()
+    revs.append(
+        f'{len(revs)+1}@{t:%Y-%m-%dT%H:%M:%S}@74cb6b70ab6b58566bfadc664b00282d'
+    )
+    doc['revisions'] = revs
+    return doc
+
+
 def aaew_type(ID: str):
     """ weist einer ID den type ``hieratic_hieroglyphic`` oder ``demotic`` zu,
     je nachdem ob sie mit einem ``d`` beginnt oder nicht.
@@ -539,8 +562,8 @@ def update_and_upload_document(collection_name: str, doc: dict, refs: list):
     appends a newly created revision to the revision history, and uploads it
     into the specified collection on the database server.
     """
-    # TODO: revision erzeugen
     doc['externalReferences'] = refs
+    add_revision(doc)
     a64[collection_name][doc['_id']] = doc
 
 
