@@ -2,34 +2,46 @@
 Evaluate externalReferences in BTS documents.
 
 Usage:
-    fix_external_references.py [<collection>...] [--stat-file=<fn>] [--fixable-only|--non-fixable-only]
-    fix_external_references.py [<collection>...] [--stat-file=<fn>] [--fix [--upload]]
-    fix_external_references.py --list-fixes
-    fix_external_references.py --list-collections
-    fix_external_references.py --generate-id
+    fix_external_references.py inspect [ --stat-file=<fn> ] [ --fixable-only | --non-fixable-only ] [ --corpus <collection>... ] 
+    fix_external_references.py apply-fixes [ upload ] [ --stat-file=<fn> ] [ --corpus <collection>... ] 
+    fix_external_references.py list-fixes
+    fix_external_references.py list-collections
+    fix_external_references.py generate-id
 
     Collected information gets saved into the JSON file at the path specified
     via --stat-file parameter as a nested dictionary structured like this:
 
         stats[collection_name][ref_provider][ref_type][doc_id] = [ref_id]
 
-Options:
-    --list-collections  Print names of all relevant collections found in
-                        connected DB (empty collections are omitted)
-    --generate-id       Generate and print a single BTS contained object ID and
+Commands:
+    apply-fixes         Apply fixes (entries in `stat-file` will contain fixes)
+
+    upload              Upload fixed refs to CouchDB
+
+    list-fixes          Print names and defined scenarios of all fix functions
+
+    generate-id         Generate and print a single BTS contained object ID and
                         stop.
+
+    list-collections    Print names of all relevant collections found in
+                        connected DB (empty collections are omitted)
+
+
+Options:
     --stat-file=<fn>    Path to a JSON file where collected statistics are
-                        saved [default: ext_refs.json].
-    --list-fixes        Print names and defined scenarios of all fix functions
+                        saved [default: `ext_refs.json`].
+
     --fixable-only      Only references to which fixes apply get saved to
                         `--stat-file`
+                        
     --non-fixable-only  Same as `--fixable-only` but the opposite
-    --fix               Apply fixes without uploading the results
-    --upload            Upload fixed refs to CouchDB
+
+    --corpus            specify one or more collections to process
+
 
 Arguments:
-    <collection>    Any number of couchDB collection names which are to be
-                    processed
+    <collection>        Any number of couchDB collection names which are to be
+                        processed
 
 """
 import re
@@ -702,9 +714,9 @@ def update_document(doc: dict, refs: list) -> dict:
 
 
 def process_external_references(
-        collection_name: str,
-        doc: dict,
-        apply_fixes: bool = False
+    collection_name: str,
+    doc: dict,
+    apply_fixes: bool = False,
 ) -> list:
     """ does only collect external references information for now and saves
     it to --stat-file.
@@ -790,7 +802,7 @@ def query_bts_doc_count(collection_name: str) -> int:
     )
 
 
-def gather_collection_stats(collection_name: str, apply_fixes: bool = False):
+def gather_collection_stats(collection_name: str, apply_fixes: bool = False, upload: bool = False):
     """ go through every BTS document in collection and collect external
     references"""
     doc_count = query_bts_doc_count(collection_name)
@@ -799,10 +811,15 @@ def gather_collection_stats(collection_name: str, apply_fixes: bool = False):
             fixed_refs = process_external_references(
                 collection_name,
                 doc,
-                apply_fixes=apply_fixes
+                apply_fixes=apply_fixes,
             )
             if fixed_refs is not None and apply_fixes is True:
-                save_side_by_side_comparison_to_file(doc, fixed_refs)
+                doc = save_side_by_side_comparison_to_file(doc, fixed_refs)
+                try:
+                    a64[collection_name][doc.get('_id')] = doc
+                except:
+                    log.info(f'could not upload document {doc.get("_id")} '
+                             f'to {collection_name}')
 
 
 def execute_fixes_and_upload(collection_name: str, doc: dict):
@@ -821,10 +838,10 @@ def list_collections():
 
 
 def main(args: dict):
-    if args.get('--list-fixes'):
+    if args.get('list-fixes'):
         print_all_scenarios()
         return
-    if args.get('--generate-id'):
+    if args.get('generate-id'):
         print(
             generate_id()
         )
@@ -832,17 +849,17 @@ def main(args: dict):
     _stats_config['fixable'] = not(args.get('--non-fixable-only', False))
     _stats_config['non-fixable'] = not(args.get('--fixable-only', False))
     if len(args['<collection>']) < 1:
-        if args['--list-collections']:
+        if args['list-collections']:
             list_collections()
             return
         else:
             print('no collection names given. go through all collections..')
             collection_names = [cn for cn in a64]
     else:
-        if args['--list-collections']:
+        if args['list-collections']:
             print(
                 'you can either specify <collection> or call '
-                '--list-collections but not both'
+                'list-collections but not both'
             )
             return
         else:
@@ -854,7 +871,8 @@ def main(args: dict):
             try:
                 gather_collection_stats(
                     collection_name,
-                    apply_fixes=args.get('--fix', False)
+                    apply_fixes=args.get('apply-fixes', False),
+                    upload=args.get('upload', False),
                 )
                 _completed[collection_name] = True
             except ValueError:
