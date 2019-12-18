@@ -34,6 +34,7 @@ Arguments:
 """
 import re
 import json
+import time
 import uuid
 import base64
 import types
@@ -363,6 +364,12 @@ def fix_provider_topographical_bibliography_reference_thot(ID: str, ref: dict) -
 def fix_provider_aaew_copy(ID: str, ref: dict):
     """ fixes the dummy provider ``aaew_copy`` which is used as an intermediate
     during DZA link creation
+
+    >>> list(fix_provider_aaew_copy('10070', {'provider': 'aaew_copy', 'type': 'hieratic_hieroglyphic'}))
+    [{'provider': 'aaew', 'type': 'hieratic_hieroglyphic'}, {'provider': 'dza', 'type': 'hieratic_hieroglyphic'}]
+
+    >>> list(fix_provider_aaew_copy('d2765', {'provider': 'aaew_copy', 'type': 'demotic'}))
+    [{'provider': 'aaew', 'type': 'demotic'}]
     """
     ref = cp_ref(ref)
     ref['provider'] = 'aaew'
@@ -372,7 +379,8 @@ def fix_provider_aaew_copy(ID: str, ref: dict):
         ref['_id'] = generate_id()
     ref['provider'] = 'dza'
     ref['type'] = aaew_type(ID)
-    yield ref
+    if ref['type'] == 'hieratic_hieroglyphic':
+        yield ref
 
 
 def fix_reference_null(ID: str, ref: dict):
@@ -839,12 +847,20 @@ def main(args: dict):
             return
         else:
             collection_names = [cn for cn in args['<collection>'] if cn in a64]
+    _completed = {c: False for c in collection_names}
     # go through specified collections
     for collection_name in collection_names:
-        gather_collection_stats(
-            collection_name,
-            apply_fixes=args.get('--fix', False)
-        )
+        while _completed[collection_name] is not True:
+            try:
+                gather_collection_stats(
+                    collection_name,
+                    apply_fixes=args.get('--fix', False)
+                )
+                _completed[collection_name] = True
+            except ValueError:
+                log.warn(f'server error during retrieval of {collection_names}. Trying again..')
+                time.sleep(3)
+
     # save collected stats
     try:
         with open(args['--stat-file'], 'w+') as f:
