@@ -68,7 +68,7 @@ _rex = {
         'thot': r'^http://thot\.philo\.ulg\.ac\.be/concept/thot-[0-9]*$',
         'topbib': r'^http://thot\.philo\.ulg\.ac\.be/concept/topbib-[0-9-]*[a-z]?$',
         'trismegistos': r'^(https?://)?www\.trismegistos\.org/[^/]*/[0-9]*$',
-        'griffith': r'^https?://topbib\.griffith\.ox\.ac\.uk//?dtb.html\?topbib=[0-9-]*[a-z]?\w*$'
+        'griffith': r'^https?://topbib\.griffith\.ox\.ac\.uk//?dtb.html\?topbib=[0-9-]*[a-z]?\s*$'
     }.items()
 }
 
