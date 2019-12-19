@@ -39,3 +39,20 @@ def test_single_fix_aaew_wcn():
     assert 'provider' in ref
     assert ref['type'] != 'aaew_wcn'
 
+def test_trismegistos():
+    refs = [
+        {'eClass': 'http://btsmodel/1.0#//BTSExternalReference',
+         '_id': 'IBcBMSa03g80WUKkudaQnaBLBJc',
+         'reference': 'www.trismegistos.org/text/52213',
+         'provider': 'trismegistos'},
+        {'eClass': 'http://btsmodel/1.0#//BTSExternalReference',
+         '_id': 'IBcAhQMGHIAH9EElmzq8ipBQ2pk',
+         'reference': 'www.trismegistos.org/text/88558',
+         'provider': 'trismegistos'}
+    ]
+    fr = fixie.apply_defined_fixes('', '', refs)
+    assert fr[0]['reference'] == '52213'
+    assert fr[1]['reference'] == '88558'
+    assert len(fr) == 2
+    assert fr[0]['type'] == 'text'
+

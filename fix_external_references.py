@@ -14,7 +14,7 @@ Usage:
         stats[collection_name][ref_provider][ref_type][doc_id] = [ref_id]
 
 Commands:
-    apply-fixes         Apply fixes (entries in `stat-file` will contain fixes)
+    apply-fixes         Apply fixes (dump fixed documents in `fixed_documents` folder)
 
     upload              Upload fixed refs to CouchDB
 
@@ -50,6 +50,7 @@ import time
 import uuid
 import base64
 import types
+from copy import deepcopy
 from datetime import datetime as dt
 from collections import defaultdict
 from functools import lru_cache, wraps
@@ -78,10 +79,11 @@ _view = "function(doc){if(doc.state=='active'&&doc.eClass){emit(doc.id,doc);}}"
 _rex = {
     k: re.compile(r)
     for k, r in {
-        'thot': r'^http://thot\.philo\.ulg\.ac\.be/concept/thot-[0-9]*$',
-        'topbib': r'^http://thot\.philo\.ulg\.ac\.be/concept/topbib-[0-9-]*[a-z]?$',
-        'trismegistos': r'^(https?://)?www\.trismegistos\.org/[^/]*/[0-9]*$',
-        'griffith': r'^https?://topbib\.griffith\.ox\.ac\.uk//?dtb.html\?topbib=[0-9-]*[a-z]?\s*$'
+        'thot': r'^http://thot\.philo\.ulg\.ac\.be/concept/thot-[0-9]+$',
+        'topbib': r'^http://thot\.philo\.ulg\.ac\.be/concept/topbib-[0-9-]+[a-z]?$',
+        'trismegistos': r'^(https?://)?www\.trismegistos\.org/[^/]+/[0-9]+$',
+        'griffith': r'^https?://topbib\.griffith\.ox\.ac\.uk//?dtb.html\?topbib=[0-9-]+[a-z]?\s*$',
+        'cfeetk': r'^https?://sith\.huma-num\.fr/vocable/[0-9]+$',
     }.items()
 }
 
@@ -262,9 +264,9 @@ def fix_type_vega(ID: str, ref: dict):
     return ref
 
 
-def fix_provider_cfeetk(ID: str, ref: dict) -> dict:
+def fix_provider_cfeetk_reference_cfeetk(ID: str, ref: dict) -> dict:
     """
-    >>> fix_provider_cfeetk('', {'reference': 'http://sith.huma-num.fr/vocable/287', 'type': 'aaew_wcn'})
+    >>> fix_provider_cfeetk_reference_cfeetk('', {'reference': 'http://sith.huma-num.fr/vocable/287', 'type': 'aaew_wcn'})
     {'reference': '287'}
     """
     ref = cp_ref(ref)
@@ -400,21 +402,6 @@ def fix_reference_null(ID: str, ref: dict):
     return None
 
 
-def exclude(*collection_names):
-    """ decorator for fix functions that are not supposed to be executed in
-    certain collections.
-
-    Functions decorated with this will not be executed by
-    :func:`apply_defined_fixes`.
-    """
-    def decorator(func):
-        func._excluded_collections = collection_names
-
-        @wraps(func)
-        def wrapper(ID: str, ref: dict):
-            yield from func(ID, ref)
-
-
 def parse_fix_name(name: str) -> dict:
     """
     >>> parse_fix_name('fix_provider_thot')
@@ -469,7 +456,7 @@ def is_fix_applicable(fix: types.FunctionType, ref: dict) -> bool:
     >>> is_fix_applicable(fix_provider_aaew_copy, {'provider': 'aaew_copy'})
     True
 
-    >>> is_fix_applicable(fix_provider_cfeetk, {'provider': 'aaew_wcn'})
+    >>> is_fix_applicable(fix_provider_cfeetk_reference_cfeetk, {'provider': 'aaew_wcn'})
     False
 
     >>> is_fix_applicable(fix_reference_null, {'type': 'foo', 'provider': 'bar'})
@@ -526,7 +513,7 @@ def get_applicable_fixes(collection_name: str, ref: dict) -> list:
 def apply_single_fix(ID: str, ref: dict, fix: types.FunctionType) -> types.GeneratorType:
     """ yields all results of the applied fix
 
-    >>> list(apply_single_fix('', {'reference': 'domain/path/ID'}, fix_provider_cfeetk))
+    >>> list(apply_single_fix('', {'reference': 'domain/path/ID'}, fix_provider_cfeetk_reference_cfeetk))
     [{'reference': 'ID'}]
 
     >>> list(apply_single_fix('', {'type': 'foo'}, fix_reference_null))
@@ -563,13 +550,16 @@ def apply_all_fixes(collection_name: str, ID: str, ref: dict) -> types.Generator
     >>> list(apply_all_fixes('', '', {'reference': 'www.trismegistos.org/text/45106'}))
     [{'reference': '45106', 'provider': 'trismegistos', 'type': 'text'}]
 
+    >>> list(apply_all_fixes('', '', {'type': 'a', 'provider': 'b'}))
+    []
+
     """
     fixes = get_applicable_fixes(collection_name, ref)
     res = [ref]
     if len(fixes) > 0:
         while len(fixes) > 0:
             fix = fixes.pop(0)
-            log.debug(f'apply fix {fix.__name__} to {res}.')
+            log.debug(f'{ID}: apply {fix.__name__} to {res}.')
             res = [
                 fixed_ref
                 for r in res
@@ -591,6 +581,9 @@ def apply_defined_fixes(collection_name: str, ID: str, refs: list) -> list:
 
     The returned results contain the changes made to the original external
     references made by all matching fix functions
+
+    >>> apply_defined_fixes('', '', [{'provider': 'a', 'type': 'b'}, {'type': 'vega', 'reference': 'x'}])
+    [{'reference': 'x', 'provider': 'vega'}]
 
     """
     fixed_refs = []
@@ -635,7 +628,7 @@ def apply_fixes_until_cows_come_home(
     return fixed_refs
 
 
-def save_stats(collection_name: str, ID: str, ref: dict):
+def save_ref(collection_name: str, ID: str, ref: dict):
     """ does just that (later this is being written to ``--stat-file``)
     """
     provider = ref.get('provider', 'null')
@@ -654,9 +647,11 @@ def _save_document(doc: dict):
 def save_side_by_side_comparison_to_file(doc: dict, fixed_refs: list):
     """ saves a before and after version of an updated document to file for
     investigation with a diff tool.
+
+    :returns: updated document
     """
     _save_document(doc)
-    update_document(doc, fixed_refs)
+    doc = update_document(doc, fixed_refs)
     log.debug(f'save {doc["eClass"]} doc {doc["_id"]} to file..')
     return doc
 
@@ -666,6 +661,9 @@ def do_fixes_apply(collection_name: str, ID: str, ref: dict) -> bool:
     ref. If so, this returns True.
 
     >>> do_fixes_apply('', '', {'provider': 'foo', 'type': 'bar', 'reference': 'id'})
+    False
+
+    >>> do_fixes_apply('', '', {'provider': 'cfeetk', 'reference': '287'})
     False
 
     """
@@ -692,11 +690,16 @@ def save_to_stats(collection_name: str, ID: str, refs: list):
             if _stats_config['non-fixable']:
                 should_be_saved = not(should_be_saved)
         if should_be_saved:
-            save_stats(collection_name, ID, ref)
+            save_ref(collection_name, ID, ref)
 
 
 def is_ref_in_list(ref: dict, refs: list) -> bool:
-    """ determines if a ref occurs within the list of refs by comparing md5 sums"""
+    """ determines if a ref occurs within the list of refs by comparing md5 sums
+
+    >>> is_ref_in_list({'a': '1', 'b': '2'}, [{'b': '2', 'a': '1'}, {'c': '1'}])
+    True
+
+    """
     h = util.md5(ref)
     for r in refs:
         if util.md5(r) == h:
@@ -707,6 +710,8 @@ def is_ref_in_list(ref: dict, refs: list) -> bool:
 def update_document(doc: dict, refs: list) -> dict:
     """ replaces the document's ``externalReferences`` array with the passed refs,
     appends a newly created revision to the revision history
+
+    :returns: updated doc
     """
     doc['externalReferences'] = refs
     add_revision(doc)
@@ -721,7 +726,7 @@ def process_external_references(
     """ does only collect external references information for now and saves
     it to --stat-file.
 
-    If ``--fix`` flag is set, fixes will be applied to fixable refs and the
+    With ``apply-fixes`` command in use, fixes will be applied to fixable refs and the
     document's ``externalReferences`` will be overwritten with the results.
 
     :returns: updated reference list in case any fixes have been applied,
@@ -740,10 +745,14 @@ def process_external_references(
             refs,
         )
     if util.md5(refs) != util.md5(fixed_refs):
+        log.debug(f'refs in document {doc["_id"]} changed.')
         if apply_fixes:
+            log.debug(f'about to log changes to {doc["_id"]}..')
             for ref in fixed_refs:
                 if not is_ref_in_list(ref, refs):
-                    save_stats(collection_name, doc['_id'], ref)
+                    # TODO: log deletions as well!
+                    log.debug(f' ref not in orig doc: {ref}')
+                    save_ref(collection_name, doc['_id'], ref)
             return fixed_refs
     return None
 
@@ -813,6 +822,26 @@ def query_bts_doc_count(collection_name: str) -> int:
     )
 
 
+def upload_document(collection_name: str, doc: dict) -> bool:
+    """ upload document to collection and indicate how that went.
+    """
+    collection = a64[collection_name]
+    doc_id = doc['_id']
+    local_rev = doc['_rev']
+    remote_rev = collection[doc_id]['_rev']
+    if remote_rev != local_rev:
+        log.warning(f'doc {collection_name}/{doc_id} rev mismatch: '
+                    f'l:{local_rev} vs. r:{remote_rev}. possible conflict')
+    try:
+        ID, new_rev = collection.save(doc)
+        log.debug(f'successfully uploaded {doc_id}. rev: {local_rev} -> {new_rev}')
+        return True
+    except Exception:
+        log.warning(f'failed to upload {doc_id}! remote: {remote_rev}, local: {local_rev}')
+        return False
+
+
+
 def gather_collection_stats(collection_name: str, apply_fixes: bool = False, upload: bool = False):
     """ go through every BTS document in collection and collect external
     references"""
@@ -825,12 +854,18 @@ def gather_collection_stats(collection_name: str, apply_fixes: bool = False, upl
                 apply_fixes=apply_fixes,
             )
             if fixed_refs is not None and apply_fixes is True:
-                doc = save_side_by_side_comparison_to_file(doc, fixed_refs)
-                try:
-                    a64[collection_name][doc.get('_id')] = doc
-                except:
-                    log.info(f'could not upload document {doc.get("_id")} '
-                             f'to {collection_name}')
+                fixed_doc = deepcopy(doc)
+                fixed_doc = save_side_by_side_comparison_to_file(fixed_doc, fixed_refs)
+                if upload:
+                    try:
+                        if upload_document(collection_name, fixed_doc):
+                            log.debug(f'successfully uploaded document {doc.get("_id")} to'
+                                      f'collection {collection_name}.')
+                        else:
+                            log.info(f'problem updating couchdb: {doc.get("_id")}!')
+                    except:
+                        log.warning(f'could not upload document {doc.get("_id")} '
+                                    f'to {collection_name}')
 
 
 def execute_fixes_and_upload(collection_name: str, doc: dict):
@@ -897,6 +932,10 @@ def main(args: dict):
             collection_names = [cn for cn in args['<collection>'] if cn in a64]
     _completed = {c: False for c in collection_names}
     # go through specified collections
+    if args.get('apply-fixes', False):
+        log.info('will apply fixes..')
+    if args.get('upload', False):
+        log.info('will upload documents when fixed..')
     for collection_name in collection_names:
         while _completed[collection_name] is not True:
             try:
@@ -913,8 +952,12 @@ def main(args: dict):
 
     # save collected stats
     try:
+        if all(_stats_config.values()):
+            logged_refs_qualifier = ''
+        else:
+            logged_refs_qualifier = 'fixable' if _stats_config['fixable'] else 'non-fixable'
         with open(args['--stat-file'], 'w+') as f:
-            print(f'writing {count_refs_in_stats()} gathered references to '
+            print(f'writing {count_refs_in_stats()} {logged_refs_qualifier} references to '
                   f'file {args["--stat-file"]}.')
             json.dump(_stats, f, indent=2, sort_keys=True)
     except Exception as e:
