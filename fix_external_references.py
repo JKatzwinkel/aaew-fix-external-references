@@ -2,8 +2,8 @@
 Evaluate externalReferences in BTS documents.
 
 Usage:
-    fix_external_references.py inspect [ --stat-file=<fn> ] [ --fixable-only | --non-fixable-only ] [ --corpus <collection>... ] 
-    fix_external_references.py apply-fixes [ upload ] [ --stat-file=<fn> ] [ --corpus <collection>... ] 
+    fix_external_references.py inspect [--stat-file=<fn>] [--fixable-only | --non-fixable-only] [--corpus <collection> ...]
+    fix_external_references.py apply-fixes [upload] [--stat-file=<fn>] [--corpus <collection> ...]
     fix_external_references.py list-fixes
     fix_external_references.py list-collections
     fix_external_references.py generate-id
@@ -29,11 +29,11 @@ Commands:
 
 Options:
     --stat-file=<fn>    Path to a JSON file where collected statistics are
-                        saved [default: `ext_refs.json`].
+                        saved [default: ext_refs.json].
 
     --fixable-only      Only references to which fixes apply get saved to
                         `--stat-file`
-                        
+
     --non-fixable-only  Same as `--fixable-only` but the opposite
 
     --corpus            specify one or more collections to process
@@ -456,7 +456,7 @@ def normalize_identifier(s: str) -> str:
     True
 
     >>> normalize_identifier(None)
-    
+
     """
     if s:
         return s.replace(' ', '').replace('_', '')
@@ -754,8 +754,18 @@ def print_all_scenarios() -> list:
         print(f'{parse_fix_name(name)} -> {name}')
 
 
-def count_refs_in_stats() -> int:
-    """ how many refs have been stored in the stats dict """
+def count_refs_in_stats(*collection_names) -> int:
+    """ how many refs have been stored in the stats dict
+
+    >>> count_refs_in_stats()
+    0
+
+    >>> _stats['c1']['provider']['type']['doc_id'] += ['ref1', 'ref2']
+    >>> count_refs_in_stats('c1')
+    2
+    """
+    collection_names = collection_names if len(collection_names) > 0 \
+        else _stats.keys()
     return sum(
         [
             len(ref_ids)
@@ -763,6 +773,7 @@ def count_refs_in_stats() -> int:
             for provider, ref_types in providers.items()
             for ref_type, doc_ids in ref_types.items()
             for doc_id, ref_ids in doc_ids.items()
+            if collection_name in collection_names
         ]
     )
 
@@ -837,6 +848,26 @@ def list_collections():
             print(f'\t{cn:<{column_width}}\t {len(a64[cn])}')
 
 
+def list_collection_stats(*collection_names):
+    """
+    >>> _stats['corpus']['p']['t1']['d1'].extend(['r1', 'r2', 'r3'])
+    >>> _stats['corpus']['p']['t2']['d3'].extend(['r6'])
+    >>> _stats['a']['p']['t1']['d2'].extend(['r4', 'r5'])
+    >>> list_collection_stats('corpus', 'a', 'b')
+     a        2
+     b        
+     corpus   4
+    """
+    if len(collection_names) < 0:
+        collection_names = [cn for cn in a64]
+    column_width = max(map(len, collection_names))
+    for cn in sorted(collection_names):
+        count = count_refs_in_stats(cn)
+        if count < 1:
+            count = ""
+        print(f' {cn:<{column_width}}   {count}')
+
+
 def main(args: dict):
     if args.get('list-fixes'):
         print_all_scenarios()
@@ -876,7 +907,8 @@ def main(args: dict):
                 )
                 _completed[collection_name] = True
             except ValueError:
-                log.warn(f'server error during retrieval of {collection_names}. Trying again..')
+                log.warning(f'server error during retrieval of {collection_name}. '
+                            f'Trying again..')
                 time.sleep(3)
 
     # save collected stats
@@ -888,6 +920,8 @@ def main(args: dict):
     except Exception as e:
         print(f'cannot write statistics to file {args["--stat-file"]}!')
         print(e)
+    print(f'logged references per collection: ')
+    list_collection_stats(*collection_names)
 
 
 if __name__ == '__main__':
